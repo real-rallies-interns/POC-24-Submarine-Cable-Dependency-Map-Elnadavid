@@ -47,16 +47,16 @@ export interface CountryDependency {
 export async function fetchCables(): Promise<Cable[]> {
   const res = await fetch(`${API_BASE}/cables`);
   if (!res.ok) throw new Error("Failed to fetch cables");
-  const data = await res.json();
-  return data.cables;
+  const json = await res.json();
+  return json.data?.cables ?? json.cables;
 }
 
 // ── Fetch all landing stations ────────────────────────────
 export async function fetchLandingStations(): Promise<LandingStation[]> {
   const res = await fetch(`${API_BASE}/landing-stations`);
   if (!res.ok) throw new Error("Failed to fetch landing stations");
-  const data = await res.json();
-  return data.landing_stations;
+  const json = await res.json();
+  return json.data?.landing_stations ?? json.landing_stations;
 }
 
 // ── Fetch one country's dependency profile ────────────────

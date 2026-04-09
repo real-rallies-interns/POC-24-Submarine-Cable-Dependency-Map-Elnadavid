@@ -43,9 +43,9 @@ export default function MapStage({
   // Fetch data from our FastAPI backend when the component loads
   useEffect(() => {
     Promise.all([fetchCables(), fetchLandingStations()])
-      .then(([cablesData, stationsData]) => {
-        setCables(cablesData);
-        setStations(stationsData);
+      .then(([cablesRes, stationsRes]) => {
+        setCables((cablesRes as any).data?.cables ?? cablesRes);
+        setStations((stationsRes as any).data?.landing_stations ?? stationsRes);
         setLoading(false);
       })
       .catch((err) => {

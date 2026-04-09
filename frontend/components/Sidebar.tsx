@@ -1,30 +1,49 @@
 "use client";
 
-// ─────────────────────────────────────────────────────────
-//  Sidebar.tsx — The 30% Intelligence Panel
-//
-//  This panel shows contextual intelligence based on what
-//  the user clicks on the map. It has 5 sections as defined
-//  in the Real Rails Master Manifesto:
-//  A: Title & Metric
-//  B: Why This Matters
-//  C: Who Controls the Rail
-//  D: Filters & Selection
-//  E: Download Sample Data
-// ─────────────────────────────────────────────────────────
-
 import { useState } from "react";
-import { Cable, CountryDependency, fetchCountryDependency } from "@/lib/api";
+import { Cable, fetchCountryDependency } from "@/lib/api";
 
 interface SidebarProps {
   selectedCable: Cable | null;
   onCountrySelect: (country: string) => void;
 }
 
+// Updated to match new backend response shape
+interface CountryDependency {
+  country: string;
+  lat: number;
+  lng: number;
+  cable_count: number;
+  weighted_redundancy_score: number;
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  recommendation: string;
+  serving_cables: {
+    id: string;
+    name: string;
+    owners: string[];
+    length_km: number;
+    ready_for_service: number;
+  }[];
+}
+
+interface ApiMeta {
+  primary: string;
+  data_mode: string;
+  trust_level: string;
+  disclaimer: string;
+  generated_at: string;
+}
+
 const RISK_COLORS = {
   LOW: "#34D399",
   MEDIUM: "#F59E0B",
   HIGH: "#F87171",
+};
+
+const RISK_BG = {
+  LOW: "rgba(52,211,153,0.1)",
+  MEDIUM: "rgba(245,158,11,0.1)",
+  HIGH: "rgba(248,113,113,0.1)",
 };
 
 const COUNTRIES = [
@@ -35,13 +54,18 @@ const COUNTRIES = [
 
 export default function Sidebar({ selectedCable, onCountrySelect }: SidebarProps) {
   const [countryData, setCountryData] = useState<CountryDependency | null>(null);
+  const [meta, setMeta] = useState<ApiMeta | null>(null);
   const [loadingCountry, setLoadingCountry] = useState(false);
 
   const handleCountrySelect = async (country: string) => {
+    if (!country) return;
     setLoadingCountry(true);
     try {
-      const data = await fetchCountryDependency(country);
-      setCountryData(data);
+      // fetchCountryDependency now returns the full wrapped response
+      const res = await fetch(`http://localhost:8000/api/country/${country}`);
+      const json = await res.json();
+      setCountryData(json.data);
+      setMeta(json.meta);
       onCountrySelect(country);
     } catch (err) {
       console.error("Failed to fetch country data:", err);
@@ -53,10 +77,12 @@ export default function Sidebar({ selectedCable, onCountrySelect }: SidebarProps
   const downloadSampleData = () => {
     const sample = {
       note: "Real Rails PoC #24 — Submarine Cable Dependency Map",
-      source: "Mock topology data based on TeleGeography references",
+      source: meta?.primary || "Mock topology data",
+      data_mode: meta?.data_mode || "SIMULATED",
       country_selected: countryData?.country || "None",
-      redundancy_score: countryData?.redundancy_score || null,
+      weighted_redundancy_score: countryData?.weighted_redundancy_score || null,
       risk_level: countryData?.risk_level || null,
+      recommendation: countryData?.recommendation || null,
     };
     const blob = new Blob([JSON.stringify(sample, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -135,7 +161,7 @@ export default function Sidebar({ selectedCable, onCountrySelect }: SidebarProps
           COUNTRY DEPENDENCY VIEW
         </div>
         <select
-          onChange={(e) => e.target.value && handleCountrySelect(e.target.value)}
+          onChange={(e) => handleCountrySelect(e.target.value)}
           style={{
             width: "100%", background: "#030712", color: "#F9FAFB",
             border: "1px solid #1F2937", borderRadius: "6px",
@@ -146,14 +172,16 @@ export default function Sidebar({ selectedCable, onCountrySelect }: SidebarProps
           {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
 
-        {/* Country result */}
         {loadingCountry && (
           <p style={{ color: "#38BDF8", fontSize: "12px", marginTop: "8px" }}>Loading...</p>
         )}
+
         {countryData && !loadingCountry && (
           <div style={{ marginTop: "12px" }}>
+
+            {/* Country header + risk badge */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-              <span style={{ color: "#F9FAFB", fontWeight: 600 }}>{countryData.country}</span>
+              <span style={{ color: "#F9FAFB", fontWeight: 600, fontSize: "14px" }}>{countryData.country}</span>
               <span style={{
                 background: RISK_COLORS[countryData.risk_level],
                 color: "#000", fontSize: "10px", fontWeight: 700,
@@ -162,19 +190,69 @@ export default function Sidebar({ selectedCable, onCountrySelect }: SidebarProps
                 {countryData.risk_level} RISK
               </span>
             </div>
-            <div style={{ color: "#6B7280", fontSize: "11px", marginBottom: "8px" }}>
-              Redundancy Score: <span style={{ color: "#38BDF8", fontWeight: 700 }}>{countryData.redundancy_score}</span> cable{countryData.redundancy_score !== 1 ? "s" : ""}
+
+            {/* Weighted score */}
+            <div style={{ color: "#6B7280", fontSize: "11px", marginBottom: "4px" }}>
+              Weighted Resilience Score:{" "}
+              <span style={{ color: "#38BDF8", fontWeight: 700 }}>
+                {countryData.weighted_redundancy_score}
+              </span>
             </div>
+            <div style={{ color: "#6B7280", fontSize: "11px", marginBottom: "12px" }}>
+              Cables serving this country:{" "}
+              <span style={{ color: "#F9FAFB", fontWeight: 600 }}>{countryData.cable_count}</span>
+            </div>
+
+            {/* ── DECISION RECOMMENDATION ── */}
+            <div style={{
+              background: RISK_BG[countryData.risk_level],
+              border: `1px solid ${RISK_COLORS[countryData.risk_level]}`,
+              borderRadius: "6px", padding: "10px", marginBottom: "12px"
+            }}>
+              <div style={{ color: RISK_COLORS[countryData.risk_level], fontSize: "10px", letterSpacing: "1px", marginBottom: "4px", fontWeight: 700 }}>
+                ALLOCATOR RECOMMENDATION
+              </div>
+              <p style={{ color: "#F9FAFB", fontSize: "12px", lineHeight: 1.5 }}>
+                {countryData.recommendation}
+              </p>
+            </div>
+
+            {/* Serving cables list */}
             {countryData.serving_cables.map((cable) => (
               <div key={cable.id} style={{
                 background: "#030712", border: "1px solid #1F2937",
                 borderRadius: "6px", padding: "8px", marginBottom: "6px"
               }}>
                 <div style={{ color: "#F9FAFB", fontSize: "12px", fontWeight: 600 }}>{cable.name}</div>
-                <div style={{ color: "#6B7280", fontSize: "11px" }}>{cable.length_km.toLocaleString()} km · {cable.ready_for_service}</div>
+                <div style={{ color: "#6B7280", fontSize: "11px" }}>
+                  {cable.length_km.toLocaleString()} km · Since {cable.ready_for_service}
+                </div>
                 <div style={{ color: "#818CF8", fontSize: "11px" }}>{cable.owners.join(", ")}</div>
               </div>
             ))}
+
+            {/* ── DATA SOURCE LABEL ── */}
+            {meta && (
+              <div style={{
+                marginTop: "8px", borderTop: "1px solid #1F2937", paddingTop: "8px"
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                  <div style={{
+                    background: meta.data_mode === "LIVE" ? "#34D399" : "#F59E0B",
+                    borderRadius: "3px", padding: "1px 6px",
+                    fontSize: "9px", fontWeight: 700, color: "#000"
+                  }}>
+                    {meta.data_mode}
+                  </div>
+                  <span style={{ color: "#6B7280", fontSize: "10px" }}>
+                    Trust: {meta.trust_level}
+                  </span>
+                </div>
+                <p style={{ color: "#4B5563", fontSize: "10px", lineHeight: 1.4 }}>
+                  {meta.disclaimer}
+                </p>
+              </div>
+            )}
           </div>
         )}
 
