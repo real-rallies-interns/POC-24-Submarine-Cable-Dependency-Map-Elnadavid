@@ -216,115 +216,6 @@ def root():
 
 </file>
 
-<file path="backend/routers/cables.py">
-import json
-import os
-from fastapi import APIRouter, HTTPException
-
-router = APIRouter()
-
-# Load mock data once when the server starts
-DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mock_cables.json")
-
-def load_data():
-    with open(DATA_PATH, "r") as f:
-        return json.load(f)
-
-
-# ─────────────────────────────────────────────
-#  ENDPOINT 1: GET /api/cables
-#  Returns the full list of all submarine cables
-# ─────────────────────────────────────────────
-@router.get("/cables")
-def get_all_cables():
-    """
-    Returns every cable with its path coordinates, owners, and landing points.
-    The frontend uses this to draw lines on the map.
-    """
-    data = load_data()
-    return {"cables": data["cables"]}
-
-
-# ─────────────────────────────────────────────
-#  ENDPOINT 2: GET /api/cables/{cable_id}
-#  Returns details for one specific cable
-# ─────────────────────────────────────────────
-@router.get("/cables/{cable_id}")
-def get_cable_by_id(cable_id: str):
-    """
-    Returns details for a single cable.
-    Example: GET /api/cables/dunant
-    """
-    data = load_data()
-    for cable in data["cables"]:
-        if cable["id"] == cable_id:
-            return cable
-    raise HTTPException(status_code=404, detail=f"Cable '{cable_id}' not found")
-
-
-# ─────────────────────────────────────────────
-#  ENDPOINT 3: GET /api/landing-stations
-#  Returns all coastal landing point locations
-# ─────────────────────────────────────────────
-@router.get("/landing-stations")
-def get_landing_stations():
-    """
-    Returns all landing stations with their lat/lng coordinates.
-    The frontend uses this to place markers on the map.
-    """
-    data = load_data()
-    return {"landing_stations": data["landing_stations"]}
-
-
-# ─────────────────────────────────────────────
-#  ENDPOINT 4: GET /api/country/{country_name}
-#  Returns the dependency profile for one country
-# ─────────────────────────────────────────────
-@router.get("/country/{country_name}")
-def get_country_dependency(country_name: str):
-    """
-    Returns which cables serve a country and its redundancy score.
-    Redundancy score = number of independent cables. 
-    A score of 1 means the country goes offline if that cable is cut.
-    """
-    data = load_data()
-
-    # Find matching landing station
-    station = None
-    for s in data["landing_stations"]:
-        if s["country"].lower() == country_name.lower():
-            station = s
-            break
-
-    if not station:
-        raise HTTPException(status_code=404, detail=f"Country '{country_name}' not found")
-
-    # Get full details for each cable serving this country
-    cable_ids = station["cables"]
-    serving_cables = []
-    for cable in data["cables"]:
-        if cable["id"] in cable_ids:
-            serving_cables.append({
-                "id": cable["id"],
-                "name": cable["name"],
-                "owners": cable["owners"],
-                "length_km": cable["length_km"],
-                "ready_for_service": cable["ready_for_service"]
-            })
-
-    redundancy_score = len(serving_cables)
-    risk_level = "HIGH" if redundancy_score == 1 else "MEDIUM" if redundancy_score == 2 else "LOW"
-
-    return {
-        "country": station["country"],
-        "lat": station["lat"],
-        "lng": station["lng"],
-        "redundancy_score": redundancy_score,
-        "risk_level": risk_level,
-        "serving_cables": serving_cables
-    }
-</file>
-
 <file path="frontend/.gitignore">
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
@@ -568,370 +459,6 @@ export default function Home() {
 @AGENTS.md
 </file>
 
-<file path="frontend/components/MapStage.tsx">
-"use client";
-
-// ─────────────────────────────────────────────────────────
-//  MapStage.tsx
-//
-//  This is the 70% left panel. It renders the interactive
-//  Leaflet map with cable paths and landing point markers.
-//
-//  "use client" is required because Leaflet needs the browser
-//  (it uses window, document etc). Next.js runs some code
-//  on the server — Leaflet can't run there.
-// ─────────────────────────────────────────────────────────
-
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, ZoomControl } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
-import { Cable, LandingStation, fetchCables, fetchLandingStations } from "@/lib/api";
-
-// Each cable gets a distinct color so they're visually separate
-const CABLE_COLORS = [
-  "#38BDF8", // cyan
-  "#818CF8", // indigo
-  "#34D399", // emerald
-  "#F59E0B", // amber
-  "#F472B6", // pink
-];
-
-interface MapStageProps {
-  onCableClick: (cable: Cable) => void;
-  onStationClick: (country: string) => void;
-  selectedCableId: string | null;
-}
-
-export default function MapStage({
-  onCableClick,
-  onStationClick,
-  selectedCableId,
-}: MapStageProps) {
-  const [cables, setCables] = useState<Cable[]>([]);
-  const [stations, setStations] = useState<LandingStation[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Fetch data from our FastAPI backend when the component loads
-  useEffect(() => {
-    Promise.all([fetchCables(), fetchLandingStations()])
-      .then(([cablesData, stationsData]) => {
-        setCables(cablesData);
-        setStations(stationsData);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error("Failed to load map data:", err);
-        setLoading(false);
-      });
-  }, []);
-
-  return (
-    <div className="relative w-full h-full">
-      {/* Loading overlay */}
-      {loading && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center"
-          style={{ background: "#030712" }}>
-          <div className="text-center">
-            <div className="text-cyan-400 text-lg font-mono mb-2">
-              Loading cable topology...
-            </div>
-            <div className="text-gray-500 text-sm">
-              Connecting to Real Rails backend
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* The Leaflet Map */}
-      <MapContainer
-        center={[20, 0]}
-        zoom={2}
-        style={{ width: "100%", height: "100%" }}
-        zoomControl={false}
-      >
-        {/* Dark map tiles from CartoDB — matches our #030712 theme */}
-        <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-        />
-
-        <ZoomControl position="bottomleft" />
-
-        {/* Draw each cable as a colored polyline */}
-        {cables.map((cable, index) => {
-          const color = CABLE_COLORS[index % CABLE_COLORS.length];
-          const isSelected = cable.id === selectedCableId;
-
-          return (
-            <Polyline
-              key={cable.id}
-              // Leaflet expects [lat, lng] but our data is [lng, lat]
-              // so we reverse each coordinate pair
-              positions={cable.coordinates.map(([lng, lat]) => [lat, lng])}
-              pathOptions={{
-                color: isSelected ? "#FFFFFF" : color,
-                weight: isSelected ? 4 : 2,
-                opacity: isSelected ? 1 : 0.7,
-              }}
-              eventHandlers={{
-                click: () => onCableClick(cable),
-              }}
-            >
-              <Tooltip sticky>
-                <div style={{ background: "#0B1117", color: "#F9FAFB", padding: "4px 8px", border: "1px solid #1F2937" }}>
-                  <strong>{cable.name}</strong><br />
-                  {cable.length_km.toLocaleString()} km<br />
-                  Owners: {cable.owners.join(", ")}
-                </div>
-              </Tooltip>
-            </Polyline>
-          );
-        })}
-
-        {/* Draw landing station markers */}
-        {stations.map((station) => (
-          <CircleMarker
-            key={station.country}
-            center={[station.lat, station.lng]}
-            radius={6}
-            pathOptions={{
-              color: "#38BDF8",
-              fillColor: "#38BDF8",
-              fillOpacity: 0.8,
-              weight: 2,
-            }}
-            eventHandlers={{
-              click: () => onStationClick(station.country),
-            }}
-          >
-            <Tooltip>
-              <div style={{ background: "#0B1117", color: "#F9FAFB", padding: "4px 8px", border: "1px solid #1F2937" }}>
-                <strong>{station.country}</strong><br />
-                {station.cables.length} cable{station.cables.length !== 1 ? "s" : ""}
-              </div>
-            </Tooltip>
-          </CircleMarker>
-        ))}
-      </MapContainer>
-    </div>
-  );
-}
-</file>
-
-<file path="frontend/components/Sidebar.tsx">
-"use client";
-
-// ─────────────────────────────────────────────────────────
-//  Sidebar.tsx — The 30% Intelligence Panel
-//
-//  This panel shows contextual intelligence based on what
-//  the user clicks on the map. It has 5 sections as defined
-//  in the Real Rails Master Manifesto:
-//  A: Title & Metric
-//  B: Why This Matters
-//  C: Who Controls the Rail
-//  D: Filters & Selection
-//  E: Download Sample Data
-// ─────────────────────────────────────────────────────────
-
-import { useState } from "react";
-import { Cable, CountryDependency, fetchCountryDependency } from "@/lib/api";
-
-interface SidebarProps {
-  selectedCable: Cable | null;
-  onCountrySelect: (country: string) => void;
-}
-
-const RISK_COLORS = {
-  LOW: "#34D399",
-  MEDIUM: "#F59E0B",
-  HIGH: "#F87171",
-};
-
-const COUNTRIES = [
-  "France", "India", "Singapore", "Egypt",
-  "USA", "South Africa", "Nigeria", "China",
-  "Japan", "Saudi Arabia"
-];
-
-export default function Sidebar({ selectedCable, onCountrySelect }: SidebarProps) {
-  const [countryData, setCountryData] = useState<CountryDependency | null>(null);
-  const [loadingCountry, setLoadingCountry] = useState(false);
-
-  const handleCountrySelect = async (country: string) => {
-    setLoadingCountry(true);
-    try {
-      const data = await fetchCountryDependency(country);
-      setCountryData(data);
-      onCountrySelect(country);
-    } catch (err) {
-      console.error("Failed to fetch country data:", err);
-    } finally {
-      setLoadingCountry(false);
-    }
-  };
-
-  const downloadSampleData = () => {
-    const sample = {
-      note: "Real Rails PoC #24 — Submarine Cable Dependency Map",
-      source: "Mock topology data based on TeleGeography references",
-      country_selected: countryData?.country || "None",
-      redundancy_score: countryData?.redundancy_score || null,
-      risk_level: countryData?.risk_level || null,
-    };
-    const blob = new Blob([JSON.stringify(sample, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "submarine_cable_sample.json";
-    a.click();
-  };
-
-  return (
-    <div
-      className="h-full flex flex-col sidebar-scroll"
-      style={{
-        background: "#0B1117",
-        borderLeft: "1px solid #1F2937",
-        padding: "16px",
-        gap: "12px",
-      }}
-    >
-      {/* ── SECTION A: Title & Metric ── */}
-      <div className="glass-card p-4">
-        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "4px" }}>
-          REAL RAILS — POC #24
-        </div>
-        <h1 style={{ color: "#F9FAFB", fontSize: "16px", fontWeight: 700, lineHeight: 1.3 }}>
-          Submarine Cable Dependency Map
-        </h1>
-        <p style={{ color: "#6B7280", fontSize: "12px", marginTop: "6px" }}>
-          Mapping the physical infrastructure beneath the digital world.
-        </p>
-        <div style={{ marginTop: "12px", display: "flex", gap: "8px" }}>
-          <div style={{ background: "#030712", border: "1px solid #1F2937", borderRadius: "6px", padding: "8px 12px", flex: 1, textAlign: "center" }}>
-            <div style={{ color: "#38BDF8", fontSize: "20px", fontWeight: 700 }}>5</div>
-            <div style={{ color: "#6B7280", fontSize: "10px" }}>Major Cables</div>
-          </div>
-          <div style={{ background: "#030712", border: "1px solid #1F2937", borderRadius: "6px", padding: "8px 12px", flex: 1, textAlign: "center" }}>
-            <div style={{ color: "#818CF8", fontSize: "20px", fontWeight: 700 }}>10</div>
-            <div style={{ color: "#6B7280", fontSize: "10px" }}>Landing Points</div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── SECTION B: Why This Matters ── */}
-      <div className="glass-card p-4">
-        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "8px" }}>
-          WHY THIS MATTERS
-        </div>
-        <p style={{ color: "#9CA3AF", fontSize: "12px", lineHeight: 1.6 }}>
-          The internet feels wireless, but <span style={{ color: "#F9FAFB", fontWeight: 600 }}>99% of international data</span> travels through underwater fiber-optic cables.
-          A single anchor strike or earthquake can take an entire nation offline.
-          This map reveals which countries are <span style={{ color: "#F87171" }}>dangerously under-connected</span> — and which corridors need investment.
-        </p>
-      </div>
-
-      {/* ── SECTION C: Who Controls the Rail ── */}
-      <div className="glass-card p-4">
-        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "8px" }}>
-          WHO CONTROLS THE RAIL
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-          {["Google", "Meta", "Orange", "Tata Communications", "China Telecom"].map((owner) => (
-            <div key={owner} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#38BDF8", flexShrink: 0 }} />
-              <span style={{ color: "#D1D5DB", fontSize: "12px" }}>{owner}</span>
-            </div>
-          ))}
-        </div>
-        <p style={{ color: "#6B7280", fontSize: "11px", marginTop: "8px" }}>
-          A handful of tech giants and telecoms own the billion-dollar cables that carry global commerce.
-        </p>
-      </div>
-
-      {/* ── SECTION D: Country Dependency Filter ── */}
-      <div className="glass-card p-4">
-        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "8px" }}>
-          COUNTRY DEPENDENCY VIEW
-        </div>
-        <select
-          onChange={(e) => e.target.value && handleCountrySelect(e.target.value)}
-          style={{
-            width: "100%", background: "#030712", color: "#F9FAFB",
-            border: "1px solid #1F2937", borderRadius: "6px",
-            padding: "8px", fontSize: "12px", cursor: "pointer"
-          }}
-        >
-          <option value="">Select a country...</option>
-          {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-
-        {/* Country result */}
-        {loadingCountry && (
-          <p style={{ color: "#38BDF8", fontSize: "12px", marginTop: "8px" }}>Loading...</p>
-        )}
-        {countryData && !loadingCountry && (
-          <div style={{ marginTop: "12px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-              <span style={{ color: "#F9FAFB", fontWeight: 600 }}>{countryData.country}</span>
-              <span style={{
-                background: RISK_COLORS[countryData.risk_level],
-                color: "#000", fontSize: "10px", fontWeight: 700,
-                padding: "2px 8px", borderRadius: "4px"
-              }}>
-                {countryData.risk_level} RISK
-              </span>
-            </div>
-            <div style={{ color: "#6B7280", fontSize: "11px", marginBottom: "8px" }}>
-              Redundancy Score: <span style={{ color: "#38BDF8", fontWeight: 700 }}>{countryData.redundancy_score}</span> cable{countryData.redundancy_score !== 1 ? "s" : ""}
-            </div>
-            {countryData.serving_cables.map((cable) => (
-              <div key={cable.id} style={{
-                background: "#030712", border: "1px solid #1F2937",
-                borderRadius: "6px", padding: "8px", marginBottom: "6px"
-              }}>
-                <div style={{ color: "#F9FAFB", fontSize: "12px", fontWeight: 600 }}>{cable.name}</div>
-                <div style={{ color: "#6B7280", fontSize: "11px" }}>{cable.length_km.toLocaleString()} km · {cable.ready_for_service}</div>
-                <div style={{ color: "#818CF8", fontSize: "11px" }}>{cable.owners.join(", ")}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Selected cable info */}
-        {selectedCable && (
-          <div style={{ marginTop: "12px", borderTop: "1px solid #1F2937", paddingTop: "12px" }}>
-            <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "6px" }}>
-              SELECTED CABLE
-            </div>
-            <div style={{ color: "#F9FAFB", fontSize: "13px", fontWeight: 600 }}>{selectedCable.name}</div>
-            <div style={{ color: "#6B7280", fontSize: "11px", marginTop: "4px" }}>{selectedCable.length_km.toLocaleString()} km</div>
-            <div style={{ color: "#818CF8", fontSize: "11px" }}>{selectedCable.owners.join(", ")}</div>
-            <div style={{ color: "#6B7280", fontSize: "11px" }}>Since {selectedCable.ready_for_service}</div>
-          </div>
-        )}
-      </div>
-
-      {/* ── SECTION E: Download ── */}
-      <button
-        onClick={downloadSampleData}
-        style={{
-          background: "transparent", border: "1px solid #38BDF8",
-          color: "#38BDF8", borderRadius: "6px", padding: "10px",
-          fontSize: "12px", cursor: "pointer", fontWeight: 600,
-          letterSpacing: "1px"
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(56,189,248,0.1)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-      >
-        ↓ DOWNLOAD SAMPLE DATA
-      </button>
-    </div>
-  );
-}
-</file>
-
 <file path="frontend/eslint.config.mjs">
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
@@ -951,78 +478,6 @@ const eslintConfig = defineConfig([
 ]);
 
 export default eslintConfig;
-</file>
-
-<file path="frontend/lib/api.ts">
-// ─────────────────────────────────────────────────────────
-//  lib/api.ts — The Data Bridge
-//
-//  This file is the ONLY place in the frontend that knows
-//  about the backend URL. All components import from here.
-//
-//  This is a key full-stack concept: if the backend URL
-//  ever changes, you update it in ONE place, not everywhere.
-// ─────────────────────────────────────────────────────────
-
-const API_BASE = "http://localhost:8000/api";
-
-// TypeScript types — these must match what the backend returns
-export interface Cable {
-  id: string;
-  name: string;
-  length_km: number;
-  owners: string[];
-  ready_for_service: number;
-  landing_points: string[];
-  coordinates: [number, number][];
-}
-
-export interface LandingStation {
-  country: string;
-  lat: number;
-  lng: number;
-  cables: string[];
-}
-
-export interface CountryDependency {
-  country: string;
-  lat: number;
-  lng: number;
-  redundancy_score: number;
-  risk_level: "LOW" | "MEDIUM" | "HIGH";
-  serving_cables: {
-    id: string;
-    name: string;
-    owners: string[];
-    length_km: number;
-    ready_for_service: number;
-  }[];
-}
-
-// ── Fetch all cables ──────────────────────────────────────
-export async function fetchCables(): Promise<Cable[]> {
-  const res = await fetch(`${API_BASE}/cables`);
-  if (!res.ok) throw new Error("Failed to fetch cables");
-  const data = await res.json();
-  return data.cables;
-}
-
-// ── Fetch all landing stations ────────────────────────────
-export async function fetchLandingStations(): Promise<LandingStation[]> {
-  const res = await fetch(`${API_BASE}/landing-stations`);
-  if (!res.ok) throw new Error("Failed to fetch landing stations");
-  const data = await res.json();
-  return data.landing_stations;
-}
-
-// ── Fetch one country's dependency profile ────────────────
-export async function fetchCountryDependency(
-  country: string
-): Promise<CountryDependency> {
-  const res = await fetch(`${API_BASE}/country/${country}`);
-  if (!res.ok) throw new Error(`Country '${country}' not found`);
-  return res.json();
-}
 </file>
 
 <file path="frontend/next.config.ts">
@@ -1170,6 +625,691 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
     "**/*.mts"
   ],
   "exclude": ["node_modules"]
+}
+</file>
+
+<file path="backend/routers/cables.py">
+import json
+import os
+from datetime import datetime
+from fastapi import APIRouter, HTTPException
+
+router = APIRouter()
+
+DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mock_cables.json")
+
+def load_data():
+    with open(DATA_PATH, "r") as f:
+        return json.load(f)
+
+# ─────────────────────────────────────────────
+#  DATA SOURCE METADATA
+#  This is the "data validation" layer.
+#  Every response now includes a metadata block
+#  so the user always knows:
+#  - Where the data came from
+#  - Whether it's real or simulated
+#  - When it was last updated
+#  - How much to trust it
+# ─────────────────────────────────────────────
+DATA_SOURCES = {
+    "primary": "TeleGeography Submarine Cable Map (public topology reference)",
+    "secondary": "PeeringDB, RIPEstat",
+    "data_mode": "SIMULATED",  # Change to "LIVE" when real API is connected
+    "last_updated": "2024-01-01",
+    "trust_level": "HIGH",     # Data structure is accurate; coordinates are approximated
+    "disclaimer": "Cable coordinates are approximated from public topology references. "
+                  "Real-time outage data requires RIPEstat API integration."
+}
+
+def build_response(data: dict) -> dict:
+    """
+    Wraps any response with metadata so the frontend
+    can always show data source information.
+    This is a key data validation pattern.
+    """
+    return {
+        "meta": {
+            **DATA_SOURCES,
+            "generated_at": datetime.utcnow().isoformat() + "Z"
+        },
+        "data": data
+    }
+
+
+# ─────────────────────────────────────────────
+#  ENDPOINT 1: GET /api/cables
+# ─────────────────────────────────────────────
+@router.get("/cables")
+def get_all_cables():
+    data = load_data()
+    return build_response({"cables": data["cables"]})
+
+
+# ─────────────────────────────────────────────
+#  ENDPOINT 2: GET /api/cables/{cable_id}
+# ─────────────────────────────────────────────
+@router.get("/cables/{cable_id}")
+def get_cable_by_id(cable_id: str):
+    data = load_data()
+    for cable in data["cables"]:
+        if cable["id"] == cable_id:
+            return build_response(cable)
+    raise HTTPException(status_code=404, detail=f"Cable '{cable_id}' not found")
+
+
+# ─────────────────────────────────────────────
+#  ENDPOINT 3: GET /api/landing-stations
+# ─────────────────────────────────────────────
+@router.get("/landing-stations")
+def get_landing_stations():
+    data = load_data()
+    return build_response({"landing_stations": data["landing_stations"]})
+
+
+# ─────────────────────────────────────────────
+#  ENDPOINT 4: GET /api/country/{country_name}
+#  Now includes a weighted redundancy score and
+#  a decision recommendation for allocators.
+# ─────────────────────────────────────────────
+@router.get("/country/{country_name}")
+def get_country_dependency(country_name: str):
+    data = load_data()
+
+    station = None
+    for s in data["landing_stations"]:
+        if s["country"].lower() == country_name.lower():
+            station = s
+            break
+
+    if not station:
+        raise HTTPException(status_code=404, detail=f"Country '{country_name}' not found")
+
+    cable_ids = station["cables"]
+    serving_cables = []
+    for cable in data["cables"]:
+        if cable["id"] in cable_ids:
+            serving_cables.append({
+                "id": cable["id"],
+                "name": cable["name"],
+                "owners": cable["owners"],
+                "length_km": cable["length_km"],
+                "ready_for_service": cable["ready_for_service"]
+            })
+
+    # ── Weighted Redundancy Score ──────────────────────
+    # Simple count is not enough for real decision making.
+    # We weight by:
+    # - Number of distinct owners (more owners = more resilient)
+    # - Cable age (older cables are higher risk of failure)
+    # This gives a more meaningful resilience picture.
+
+    current_year = datetime.utcnow().year
+    total_score = 0
+
+    for cable in serving_cables:
+        age = current_year - cable["ready_for_service"]
+        owner_diversity = len(cable["owners"])
+
+        # Age penalty: cables older than 10 years score lower
+        age_factor = 1.0 if age <= 10 else 0.7
+
+        # Owner diversity bonus: more owners = more accountability
+        diversity_factor = min(owner_diversity / 3, 1.0)
+
+        cable_score = age_factor * (0.5 + 0.5 * diversity_factor)
+        total_score += cable_score
+
+    weighted_score = round(total_score, 2)
+
+    # ── Risk Classification ────────────────────────────
+    if weighted_score >= 2.0:
+        risk_level = "LOW"
+        recommendation = "Connectivity is resilient. Monitor for aging infrastructure."
+    elif weighted_score >= 1.0:
+        risk_level = "MEDIUM"
+        recommendation = "Moderate risk. A single cable failure could cause disruption. Consider advocating for a new cable landing."
+    else:
+        risk_level = "HIGH"
+        recommendation = "CRITICAL: This country depends on a single aging cable. Any disruption causes total isolation. Immediate investment required."
+
+    return build_response({
+        "country": station["country"],
+        "lat": station["lat"],
+        "lng": station["lng"],
+        "cable_count": len(serving_cables),
+        "weighted_redundancy_score": weighted_score,
+        "risk_level": risk_level,
+        "recommendation": recommendation,
+        "serving_cables": serving_cables
+    })
+
+
+# ─────────────────────────────────────────────
+#  ENDPOINT 5: GET /api/data-sources
+#  New endpoint — exposes data provenance
+#  so the frontend can show a clear data label
+# ─────────────────────────────────────────────
+@router.get("/data-sources")
+def get_data_sources():
+    """
+    Returns metadata about where this data comes from.
+    Transparency is a core Real Rails principle.
+    """
+    return DATA_SOURCES
+</file>
+
+<file path="frontend/components/MapStage.tsx">
+"use client";
+
+// ─────────────────────────────────────────────────────────
+//  MapStage.tsx
+//
+//  This is the 70% left panel. It renders the interactive
+//  Leaflet map with cable paths and landing point markers.
+//
+//  "use client" is required because Leaflet needs the browser
+//  (it uses window, document etc). Next.js runs some code
+//  on the server — Leaflet can't run there.
+// ─────────────────────────────────────────────────────────
+
+import { useEffect, useState } from "react";
+import { MapContainer, TileLayer, Polyline, CircleMarker, Tooltip, ZoomControl } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import { Cable, LandingStation, fetchCables, fetchLandingStations } from "@/lib/api";
+
+// Each cable gets a distinct color so they're visually separate
+const CABLE_COLORS = [
+  "#38BDF8", // cyan
+  "#818CF8", // indigo
+  "#34D399", // emerald
+  "#F59E0B", // amber
+  "#F472B6", // pink
+];
+
+interface MapStageProps {
+  onCableClick: (cable: Cable) => void;
+  onStationClick: (country: string) => void;
+  selectedCableId: string | null;
+}
+
+export default function MapStage({
+  onCableClick,
+  onStationClick,
+  selectedCableId,
+}: MapStageProps) {
+  const [cables, setCables] = useState<Cable[]>([]);
+  const [stations, setStations] = useState<LandingStation[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch data from our FastAPI backend when the component loads
+  useEffect(() => {
+    Promise.all([fetchCables(), fetchLandingStations()])
+      .then(([cablesRes, stationsRes]) => {
+        setCables((cablesRes as any).data?.cables ?? cablesRes);
+        setStations((stationsRes as any).data?.landing_stations ?? stationsRes);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to load map data:", err);
+        setLoading(false);
+      });
+  }, []);
+
+  return (
+    <div className="relative w-full h-full">
+      {/* Loading overlay */}
+      {loading && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center"
+          style={{ background: "#030712" }}>
+          <div className="text-center">
+            <div className="text-cyan-400 text-lg font-mono mb-2">
+              Loading cable topology...
+            </div>
+            <div className="text-gray-500 text-sm">
+              Connecting to Real Rails backend
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* The Leaflet Map */}
+      <MapContainer
+        center={[20, 0]}
+        zoom={2}
+        style={{ width: "100%", height: "100%" }}
+        zoomControl={false}
+      >
+        {/* Dark map tiles from CartoDB — matches our #030712 theme */}
+        <TileLayer
+          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          attribution='&copy; <a href="https://carto.com/">CARTO</a>'
+        />
+
+        <ZoomControl position="bottomleft" />
+
+        {/* Draw each cable as a colored polyline */}
+        {cables.map((cable, index) => {
+          const color = CABLE_COLORS[index % CABLE_COLORS.length];
+          const isSelected = cable.id === selectedCableId;
+
+          return (
+            <Polyline
+              key={cable.id}
+              // Leaflet expects [lat, lng] but our data is [lng, lat]
+              // so we reverse each coordinate pair
+              positions={cable.coordinates.map(([lng, lat]) => [lat, lng])}
+              pathOptions={{
+                color: isSelected ? "#FFFFFF" : color,
+                weight: isSelected ? 4 : 2,
+                opacity: isSelected ? 1 : 0.7,
+              }}
+              eventHandlers={{
+                click: () => onCableClick(cable),
+              }}
+            >
+              <Tooltip sticky>
+                <div style={{ background: "#0B1117", color: "#F9FAFB", padding: "4px 8px", border: "1px solid #1F2937" }}>
+                  <strong>{cable.name}</strong><br />
+                  {cable.length_km.toLocaleString()} km<br />
+                  Owners: {cable.owners.join(", ")}
+                </div>
+              </Tooltip>
+            </Polyline>
+          );
+        })}
+
+        {/* Draw landing station markers */}
+        {stations.map((station) => (
+          <CircleMarker
+            key={station.country}
+            center={[station.lat, station.lng]}
+            radius={6}
+            pathOptions={{
+              color: "#38BDF8",
+              fillColor: "#38BDF8",
+              fillOpacity: 0.8,
+              weight: 2,
+            }}
+            eventHandlers={{
+              click: () => onStationClick(station.country),
+            }}
+          >
+            <Tooltip>
+              <div style={{ background: "#0B1117", color: "#F9FAFB", padding: "4px 8px", border: "1px solid #1F2937" }}>
+                <strong>{station.country}</strong><br />
+                {station.cables.length} cable{station.cables.length !== 1 ? "s" : ""}
+              </div>
+            </Tooltip>
+          </CircleMarker>
+        ))}
+      </MapContainer>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/components/Sidebar.tsx">
+"use client";
+
+import { useState } from "react";
+import { Cable, fetchCountryDependency } from "@/lib/api";
+
+interface SidebarProps {
+  selectedCable: Cable | null;
+  onCountrySelect: (country: string) => void;
+}
+
+// Updated to match new backend response shape
+interface CountryDependency {
+  country: string;
+  lat: number;
+  lng: number;
+  cable_count: number;
+  weighted_redundancy_score: number;
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  recommendation: string;
+  serving_cables: {
+    id: string;
+    name: string;
+    owners: string[];
+    length_km: number;
+    ready_for_service: number;
+  }[];
+}
+
+interface ApiMeta {
+  primary: string;
+  data_mode: string;
+  trust_level: string;
+  disclaimer: string;
+  generated_at: string;
+}
+
+const RISK_COLORS = {
+  LOW: "#34D399",
+  MEDIUM: "#F59E0B",
+  HIGH: "#F87171",
+};
+
+const RISK_BG = {
+  LOW: "rgba(52,211,153,0.1)",
+  MEDIUM: "rgba(245,158,11,0.1)",
+  HIGH: "rgba(248,113,113,0.1)",
+};
+
+const COUNTRIES = [
+  "France", "India", "Singapore", "Egypt",
+  "USA", "South Africa", "Nigeria", "China",
+  "Japan", "Saudi Arabia"
+];
+
+export default function Sidebar({ selectedCable, onCountrySelect }: SidebarProps) {
+  const [countryData, setCountryData] = useState<CountryDependency | null>(null);
+  const [meta, setMeta] = useState<ApiMeta | null>(null);
+  const [loadingCountry, setLoadingCountry] = useState(false);
+
+  const handleCountrySelect = async (country: string) => {
+    if (!country) return;
+    setLoadingCountry(true);
+    try {
+      // fetchCountryDependency now returns the full wrapped response
+      const res = await fetch(`http://localhost:8000/api/country/${country}`);
+      const json = await res.json();
+      setCountryData(json.data);
+      setMeta(json.meta);
+      onCountrySelect(country);
+    } catch (err) {
+      console.error("Failed to fetch country data:", err);
+    } finally {
+      setLoadingCountry(false);
+    }
+  };
+
+  const downloadSampleData = () => {
+    const sample = {
+      note: "Real Rails PoC #24 — Submarine Cable Dependency Map",
+      source: meta?.primary || "Mock topology data",
+      data_mode: meta?.data_mode || "SIMULATED",
+      country_selected: countryData?.country || "None",
+      weighted_redundancy_score: countryData?.weighted_redundancy_score || null,
+      risk_level: countryData?.risk_level || null,
+      recommendation: countryData?.recommendation || null,
+    };
+    const blob = new Blob([JSON.stringify(sample, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "submarine_cable_sample.json";
+    a.click();
+  };
+
+  return (
+    <div
+      className="h-full flex flex-col sidebar-scroll"
+      style={{
+        background: "#0B1117",
+        borderLeft: "1px solid #1F2937",
+        padding: "16px",
+        gap: "12px",
+      }}
+    >
+      {/* ── SECTION A: Title & Metric ── */}
+      <div className="glass-card p-4">
+        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "4px" }}>
+          REAL RAILS — POC #24
+        </div>
+        <h1 style={{ color: "#F9FAFB", fontSize: "16px", fontWeight: 700, lineHeight: 1.3 }}>
+          Submarine Cable Dependency Map
+        </h1>
+        <p style={{ color: "#6B7280", fontSize: "12px", marginTop: "6px" }}>
+          Mapping the physical infrastructure beneath the digital world.
+        </p>
+        <div style={{ marginTop: "12px", display: "flex", gap: "8px" }}>
+          <div style={{ background: "#030712", border: "1px solid #1F2937", borderRadius: "6px", padding: "8px 12px", flex: 1, textAlign: "center" }}>
+            <div style={{ color: "#38BDF8", fontSize: "20px", fontWeight: 700 }}>5</div>
+            <div style={{ color: "#6B7280", fontSize: "10px" }}>Major Cables</div>
+          </div>
+          <div style={{ background: "#030712", border: "1px solid #1F2937", borderRadius: "6px", padding: "8px 12px", flex: 1, textAlign: "center" }}>
+            <div style={{ color: "#818CF8", fontSize: "20px", fontWeight: 700 }}>10</div>
+            <div style={{ color: "#6B7280", fontSize: "10px" }}>Landing Points</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── SECTION B: Why This Matters ── */}
+      <div className="glass-card p-4">
+        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "8px" }}>
+          WHY THIS MATTERS
+        </div>
+        <p style={{ color: "#9CA3AF", fontSize: "12px", lineHeight: 1.6 }}>
+          The internet feels wireless, but <span style={{ color: "#F9FAFB", fontWeight: 600 }}>99% of international data</span> travels through underwater fiber-optic cables.
+          A single anchor strike or earthquake can take an entire nation offline.
+          This map reveals which countries are <span style={{ color: "#F87171" }}>dangerously under-connected</span> — and which corridors need investment.
+        </p>
+      </div>
+
+      {/* ── SECTION C: Who Controls the Rail ── */}
+      <div className="glass-card p-4">
+        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "8px" }}>
+          WHO CONTROLS THE RAIL
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          {["Google", "Meta", "Orange", "Tata Communications", "China Telecom"].map((owner) => (
+            <div key={owner} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#38BDF8", flexShrink: 0 }} />
+              <span style={{ color: "#D1D5DB", fontSize: "12px" }}>{owner}</span>
+            </div>
+          ))}
+        </div>
+        <p style={{ color: "#6B7280", fontSize: "11px", marginTop: "8px" }}>
+          A handful of tech giants and telecoms own the billion-dollar cables that carry global commerce.
+        </p>
+      </div>
+
+      {/* ── SECTION D: Country Dependency Filter ── */}
+      <div className="glass-card p-4">
+        <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "8px" }}>
+          COUNTRY DEPENDENCY VIEW
+        </div>
+        <select
+          onChange={(e) => handleCountrySelect(e.target.value)}
+          style={{
+            width: "100%", background: "#030712", color: "#F9FAFB",
+            border: "1px solid #1F2937", borderRadius: "6px",
+            padding: "8px", fontSize: "12px", cursor: "pointer"
+          }}
+        >
+          <option value="">Select a country...</option>
+          {COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+
+        {loadingCountry && (
+          <p style={{ color: "#38BDF8", fontSize: "12px", marginTop: "8px" }}>Loading...</p>
+        )}
+
+        {countryData && !loadingCountry && (
+          <div style={{ marginTop: "12px" }}>
+
+            {/* Country header + risk badge */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+              <span style={{ color: "#F9FAFB", fontWeight: 600, fontSize: "14px" }}>{countryData.country}</span>
+              <span style={{
+                background: RISK_COLORS[countryData.risk_level],
+                color: "#000", fontSize: "10px", fontWeight: 700,
+                padding: "2px 8px", borderRadius: "4px"
+              }}>
+                {countryData.risk_level} RISK
+              </span>
+            </div>
+
+            {/* Weighted score */}
+            <div style={{ color: "#6B7280", fontSize: "11px", marginBottom: "4px" }}>
+              Weighted Resilience Score:{" "}
+              <span style={{ color: "#38BDF8", fontWeight: 700 }}>
+                {countryData.weighted_redundancy_score}
+              </span>
+            </div>
+            <div style={{ color: "#6B7280", fontSize: "11px", marginBottom: "12px" }}>
+              Cables serving this country:{" "}
+              <span style={{ color: "#F9FAFB", fontWeight: 600 }}>{countryData.cable_count}</span>
+            </div>
+
+            {/* ── DECISION RECOMMENDATION ── */}
+            <div style={{
+              background: RISK_BG[countryData.risk_level],
+              border: `1px solid ${RISK_COLORS[countryData.risk_level]}`,
+              borderRadius: "6px", padding: "10px", marginBottom: "12px"
+            }}>
+              <div style={{ color: RISK_COLORS[countryData.risk_level], fontSize: "10px", letterSpacing: "1px", marginBottom: "4px", fontWeight: 700 }}>
+                ALLOCATOR RECOMMENDATION
+              </div>
+              <p style={{ color: "#F9FAFB", fontSize: "12px", lineHeight: 1.5 }}>
+                {countryData.recommendation}
+              </p>
+            </div>
+
+            {/* Serving cables list */}
+            {countryData.serving_cables.map((cable) => (
+              <div key={cable.id} style={{
+                background: "#030712", border: "1px solid #1F2937",
+                borderRadius: "6px", padding: "8px", marginBottom: "6px"
+              }}>
+                <div style={{ color: "#F9FAFB", fontSize: "12px", fontWeight: 600 }}>{cable.name}</div>
+                <div style={{ color: "#6B7280", fontSize: "11px" }}>
+                  {cable.length_km.toLocaleString()} km · Since {cable.ready_for_service}
+                </div>
+                <div style={{ color: "#818CF8", fontSize: "11px" }}>{cable.owners.join(", ")}</div>
+              </div>
+            ))}
+
+            {/* ── DATA SOURCE LABEL ── */}
+            {meta && (
+              <div style={{
+                marginTop: "8px", borderTop: "1px solid #1F2937", paddingTop: "8px"
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                  <div style={{
+                    background: meta.data_mode === "LIVE" ? "#34D399" : "#F59E0B",
+                    borderRadius: "3px", padding: "1px 6px",
+                    fontSize: "9px", fontWeight: 700, color: "#000"
+                  }}>
+                    {meta.data_mode}
+                  </div>
+                  <span style={{ color: "#6B7280", fontSize: "10px" }}>
+                    Trust: {meta.trust_level}
+                  </span>
+                </div>
+                <p style={{ color: "#4B5563", fontSize: "10px", lineHeight: 1.4 }}>
+                  {meta.disclaimer}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Selected cable info */}
+        {selectedCable && (
+          <div style={{ marginTop: "12px", borderTop: "1px solid #1F2937", paddingTop: "12px" }}>
+            <div style={{ color: "#38BDF8", fontSize: "10px", letterSpacing: "2px", marginBottom: "6px" }}>
+              SELECTED CABLE
+            </div>
+            <div style={{ color: "#F9FAFB", fontSize: "13px", fontWeight: 600 }}>{selectedCable.name}</div>
+            <div style={{ color: "#6B7280", fontSize: "11px", marginTop: "4px" }}>{selectedCable.length_km.toLocaleString()} km</div>
+            <div style={{ color: "#818CF8", fontSize: "11px" }}>{selectedCable.owners.join(", ")}</div>
+            <div style={{ color: "#6B7280", fontSize: "11px" }}>Since {selectedCable.ready_for_service}</div>
+          </div>
+        )}
+      </div>
+
+      {/* ── SECTION E: Download ── */}
+      <button
+        onClick={downloadSampleData}
+        style={{
+          background: "transparent", border: "1px solid #38BDF8",
+          color: "#38BDF8", borderRadius: "6px", padding: "10px",
+          fontSize: "12px", cursor: "pointer", fontWeight: 600,
+          letterSpacing: "1px"
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(56,189,248,0.1)")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      >
+        ↓ DOWNLOAD SAMPLE DATA
+      </button>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/lib/api.ts">
+// ─────────────────────────────────────────────────────────
+//  lib/api.ts — The Data Bridge
+//
+//  This file is the ONLY place in the frontend that knows
+//  about the backend URL. All components import from here.
+//
+//  This is a key full-stack concept: if the backend URL
+//  ever changes, you update it in ONE place, not everywhere.
+// ─────────────────────────────────────────────────────────
+
+const API_BASE = "http://localhost:8000/api";
+
+// TypeScript types — these must match what the backend returns
+export interface Cable {
+  id: string;
+  name: string;
+  length_km: number;
+  owners: string[];
+  ready_for_service: number;
+  landing_points: string[];
+  coordinates: [number, number][];
+}
+
+export interface LandingStation {
+  country: string;
+  lat: number;
+  lng: number;
+  cables: string[];
+}
+
+export interface CountryDependency {
+  country: string;
+  lat: number;
+  lng: number;
+  redundancy_score: number;
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  serving_cables: {
+    id: string;
+    name: string;
+    owners: string[];
+    length_km: number;
+    ready_for_service: number;
+  }[];
+}
+
+// ── Fetch all cables ──────────────────────────────────────
+export async function fetchCables(): Promise<Cable[]> {
+  const res = await fetch(`${API_BASE}/cables`);
+  if (!res.ok) throw new Error("Failed to fetch cables");
+  const json = await res.json();
+  return json.data?.cables ?? json.cables;
+}
+
+// ── Fetch all landing stations ────────────────────────────
+export async function fetchLandingStations(): Promise<LandingStation[]> {
+  const res = await fetch(`${API_BASE}/landing-stations`);
+  if (!res.ok) throw new Error("Failed to fetch landing stations");
+  const json = await res.json();
+  return json.data?.landing_stations ?? json.landing_stations;
+}
+
+// ── Fetch one country's dependency profile ────────────────
+export async function fetchCountryDependency(
+  country: string
+): Promise<CountryDependency> {
+  const res = await fetch(`${API_BASE}/country/${country}`);
+  if (!res.ok) throw new Error(`Country '${country}' not found`);
+  return res.json();
 }
 </file>
 
