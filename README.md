@@ -1,4 +1,4 @@
-# 🌊 Submarine Cable Dependency Map — Real Rails PoC #24
+#  Submarine Cable Dependency Map — Real Rails PoC #24
 
 > *"You aren't just building a map. You are building Infrastructure Transparency."*
 
@@ -12,7 +12,7 @@ A fullstack intelligence dashboard that visualizes the global submarine cable ne
 
 ---
 
-## 🎯 Purpose
+##  Purpose
 
 We think of the internet as "wireless" or "the cloud" — but **99% of international data** travels through underwater fiber-optic cables. If a single cable is cut by an anchor, an earthquake, or sabotage, entire nations can go offline.
 
@@ -23,7 +23,7 @@ This dashboard answers three critical questions:
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌─────────────────────────────┐     HTTP/JSON      ┌──────────────────────────┐
@@ -43,7 +43,7 @@ This dashboard answers three critical questions:
 
 ---
 
-## 🧠 Intelligence Features
+##  Intelligence Features
 
 ### Phase 1 (Complete)
 - **Interactive Cable Map** — Leaflet-powered geospatial visualization of major submarine cable paths
@@ -62,7 +62,7 @@ This dashboard answers three critical questions:
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -75,7 +75,7 @@ This dashboard answers three critical questions:
 
 ---
 
-## 🚀 Running Locally
+##  Running Locally
 
 ### Prerequisites
 - Python 3.10+
@@ -102,7 +102,7 @@ npm run dev
 
 ---
 
-## 📡 API Endpoints
+##  API Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -114,7 +114,7 @@ npm run dev
 
 ---
 
-## 📊 Data Sources
+##  Data Sources
 
 | Source | Usage | Mode |
 |---|---|---|
