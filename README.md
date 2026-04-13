@@ -126,14 +126,4 @@ npm run dev
 
 ---
 
-## 🏢 Internship Context
-
-**Program:** Real Rails Intelligence Library  
-**PoC:** #24 — Submarine Cable Dependency Map  
-**Category:** Data & Intelligence / Infrastructure  
-**Intern:** Elnad  
-**Coordinator:** Unnikrishnan P S  
-
----
-
 *Built as part of the Real Rails internship program — mapping the physical infrastructure beneath the digital world.*
