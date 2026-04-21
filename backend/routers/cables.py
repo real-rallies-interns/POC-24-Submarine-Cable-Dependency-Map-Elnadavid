@@ -61,6 +61,16 @@ def build_cables_from_telegeography(tg_data):
 
     # Fetch real GeoJSON coordinates
     geo_data = fetch_telegeography_geo()
+    def simplify_coords(coords, step=5):
+        """Keep every Nth point to reduce density while preserving shape."""
+        if len(coords) <= 10:
+            return coords
+        simplified = coords[::step]
+        # Always include the last point
+        if simplified[-1] != coords[-1]:
+            simplified.append(coords[-1])
+        return simplified
+
     geo_by_id = {}
     if geo_data and "features" in geo_data:
         for feature in geo_data["features"]:
@@ -70,7 +80,11 @@ def build_cables_from_telegeography(tg_data):
             coords = geometry.get("coordinates", [])
             # MultiLineString — take first line segment
             if coords and isinstance(coords[0], list):
-                geo_by_id[cable_id] = coords[0]
+                # Combine ALL segments into one continuous path
+                all_coords = []
+                for seg in coords:
+                    all_coords.extend(seg)
+                geo_by_id[cable_id] = simplify_coords(all_coords, step=10)
 
     cables = []
     for item in tg_data:
@@ -99,8 +113,9 @@ def build_cables_from_telegeography(tg_data):
 
         if matched_id and matched_id in mock_by_id:
             mock_cable = mock_by_id[matched_id]
-            
-            coordinates = mock_cable["coordinates"]
+            # Use real GeoJSON coordinates from TeleGeography
+            real_coords = geo_by_id.get(cable_id, geo_by_id.get(matched_id, None))
+            coordinates = real_coords if real_coords else mock_cable["coordinates"]
 
             cables.append({
                 "id": mock_cable["id"],
@@ -268,3 +283,15 @@ def get_data_sources():
     if tg_data:
         return {**DATA_SOURCES_LIVE, "generated_at": datetime.utcnow().isoformat() + "Z"}
     return {**DATA_SOURCES_SIMULATED, "generated_at": datetime.utcnow().isoformat() + "Z"}
+
+# ─────────────────────────────────────────────
+#  ENDPOINT 6: GET /api/cable-geo
+#  Proxies TeleGeography GeoJSON through backend
+#  to avoid CORS issues in the frontend
+# ─────────────────────────────────────────────
+@router.get("/cable-geo")
+def get_cable_geo():
+    geo_data = fetch_telegeography_geo()
+    if not geo_data:
+        raise HTTPException(status_code=503, detail="TeleGeography GeoJSON unavailable")
+    return geo_data
