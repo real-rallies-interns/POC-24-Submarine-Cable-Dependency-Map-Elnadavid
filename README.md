@@ -8,8 +8,6 @@ A fullstack intelligence dashboard that visualizes the global submarine cable ne
 
 ## 📸 Preview
 
-![Submarine Cable Dependency Map](preview.png)
-
 ---
 
 ##  Purpose
